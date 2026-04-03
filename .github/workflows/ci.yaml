@@ -17,5 +17,5 @@ jobs:
         with:
           node-version-file: package.json
           cache: 'pnpm'
-      - run: pnpm ci
+      - run: pnpm install --frozen-lockfile
       - run: pnpm lint
