@@ -1,0 +1,47 @@
+{
+  "name": "opentelemetry-instrumentation-sapphire",
+  "version": "0.1.0",
+  "description": "",
+  "author": "jnarezo",
+  "repository": "github:jnarezo/opentelemetry-instrumentation-sapphire",
+  "license": "MIT",
+  "keywords": ["opentelemetry", "instrumentation", "sapphire", "framework", "discord.js", "tracing", "observability"],
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "./dist"
+  ],
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "prepare": "pnpm build",
+    "build": "tsc --build",
+    "lint": "tsc --noEmit",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "peerDependencies": {
+    "@sapphire/framework": "^5.5.0",
+    "discord.js": "^14.26.0"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/core": "^2.6.1",
+    "@opentelemetry/instrumentation": "^0.214.0",
+    "@opentelemetry/instrumentation-http": "^0.214.0",
+    "@opentelemetry/semantic-conventions": "^1.40.0"
+  },
+  "devDependencies": {
+    "@sapphire/framework": "^5.5.0",
+    "@tsconfig/node-lts": "^24.0.0",
+    "@tsconfig/node-ts": "^23.6.4",
+    "@types/node": "^25.5.0",
+    "discord.js": "^14.26.0",
+    "prettier": "^3.8.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  }
+}

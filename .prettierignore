@@ -1,0 +1,6 @@
+node_modules
+dist
+*.yaml
+*.yml
+*.json
+*.md
