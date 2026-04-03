@@ -18,7 +18,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "prepare": "pnpm build",
+    "prepack": "pnpm build",
     "build": "tsc --build",
     "lint": "tsc --noEmit",
     "test": "echo \"Error: no test specified\" && exit 1"
