@@ -29,12 +29,11 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/core": "^2.6.1",
     "@opentelemetry/instrumentation": "^0.214.0",
-    "@opentelemetry/instrumentation-http": "^0.214.0",
     "@opentelemetry/semantic-conventions": "^1.40.0"
   },
   "devDependencies": {
+    "@opentelemetry/core": "^2.6.1",
     "@sapphire/framework": "^5.5.0",
     "@tsconfig/node-lts": "^24.0.0",
     "@tsconfig/node-ts": "^23.6.4",
