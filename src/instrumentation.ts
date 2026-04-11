@@ -93,7 +93,7 @@ export class SapphireInstrumentation extends InstrumentationBase<SapphireInstrum
   }
 }
 
-function _endSpan<F extends () => any>(fn: F, span: Span) {
+function _endSpan<F extends () => unknown>(fn: F, span: Span) {
   try {
     const result = fn() as ReturnType<F>;
     if (isPromise(result)) {
