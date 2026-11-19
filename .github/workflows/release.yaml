@@ -12,8 +12,37 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.RELEASE_GITHUB_TOKEN }}
           release-type: node
+  publish:
+    name: Publish
+    needs: process-release
+    if: >-
+      needs.process-release.outputs.release_created == 'true' &&
+      startsWith(needs.process-release.outputs.tag_name, 'v') &&
+      !contains(needs.process-release.outputs.tag_name, '-rc')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.process-release.outputs.tag_name }}
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      # https://github.com/pnpm/pnpm/issues/5894
+      - run: pnpm publish --provenance --no-git-checks
