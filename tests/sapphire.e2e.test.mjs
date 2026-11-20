@@ -8,7 +8,7 @@ const runNode = promisify(execFile);
 const app = fileURLToPath(new URL('./sapphire-app.mjs', import.meta.url));
 
 test.each(['CommonJS', 'ESM'])(
-  'patches Sapphire and exports a listener trace with %s loading',
+  'exports Sapphire listener and lifecycle spans with %s loading',
   async (format) => {
     await runNode(process.execPath, [app, format], { timeout: 15_000 });
   },

@@ -9,11 +9,13 @@ import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-ho
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
 import { SapphireInstrumentation } from '../dist/index.js';
+import { verifyLifecycle } from './sapphire-lifecycle.mjs';
 
 const exporter = new InMemorySpanExporter();
 const tracerProvider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
 context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-const unregister = registerInstrumentations({ tracerProvider, instrumentations: [new SapphireInstrumentation()] });
+const instrumentation = new SapphireInstrumentation();
+const unregister = registerInstrumentations({ tracerProvider, instrumentations: [instrumentation] });
 
 try {
   const format = process.argv[2];
@@ -21,10 +23,11 @@ try {
   if (format === 'ESM') {
     register('@opentelemetry/instrumentation/hook.mjs', import.meta.url);
   }
-  const { Listener, ListenerStore } =
+  const framework =
     format === 'ESM'
       ? await import('@sapphire/framework')
       : /** @type {typeof import('@sapphire/framework')} */ (createRequire(import.meta.url)('@sapphire/framework'));
+  const { Listener, ListenerStore } = framework;
 
   const tracer = tracerProvider.getTracer('sapphire-test-app');
   const event = 'testEvent';
@@ -106,6 +109,9 @@ try {
     assert.equal(handler.spanContext().traceId, parent.spanContext().traceId);
     assert.equal(handler.parentSpanContext?.spanId, listener.spanContext().spanId);
   }
+
+  exporter.reset();
+  await verifyLifecycle(framework, tracer, exporter, instrumentation);
 
   unregister();
   exporter.reset();
