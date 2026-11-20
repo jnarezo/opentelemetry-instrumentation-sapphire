@@ -15,19 +15,29 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           token: ${{ secrets.RELEASE_GITHUB_TOKEN }}
           release-type: node
-  publish:
-    name: Publish
+  validate-release:
+    name: Validate Release
     needs: process-release
     if: >-
       needs.process-release.outputs.release_created == 'true' &&
+      needs.process-release.outputs.sha != '' &&
       startsWith(needs.process-release.outputs.tag_name, 'v') &&
       !contains(needs.process-release.outputs.tag_name, '-rc')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yaml
+    with:
+      ref: ${{ needs.process-release.outputs.sha }}
+  publish:
+    name: Publish
+    needs: [process-release, validate-release]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -35,14 +45,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: refs/tags/${{ needs.process-release.outputs.tag_name }}
+          ref: ${{ needs.process-release.outputs.sha }}
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
-          node-version-file: package.json
+          node-version: '24'
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
       # https://github.com/pnpm/pnpm/issues/5894
       - run: pnpm publish --provenance --no-git-checks

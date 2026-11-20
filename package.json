@@ -33,7 +33,7 @@
     "prepare": "husky",
     "prepack": "pnpm build",
     "build": "tsc --build",
-    "lint": "prettier . && eslint && tsc --noEmit",
+    "lint": "prettier --check . && eslint && tsc --noEmit",
     "lint:fix": "prettier --write .",
     "test": "pnpm build && tsc -p tests/tsconfig.json && vitest run",
     "test:unit": "vitest run .unit.test.",
