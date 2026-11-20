@@ -1,8 +1,6 @@
 # opentelemetry-instrumentation-sapphire
 
-Adds opentelemetry tracing instrumentation for the `@sapphire/framework` library. Enables and adds tracing across registered listeners.
-
-Additional instrumentation is work-in-progress.
+Adds OpenTelemetry tracing for `@sapphire/framework` listeners, commands, interaction handlers, preconditions, and startup.
 
 ## Installation
 
@@ -46,4 +44,18 @@ If you want, you can [read more about the above issues](https://github.com/open-
 
 ## Config
 
-Additional configuration is still WIP.
+| Option | Default | Adds |
+| --- | --- | --- |
+| `traceInteractionHandlerParse` | `false` | A span for each eligible interaction handler's `parse` callback, with a matched or unmatched outcome |
+| `traceIndividualPreconditions` | `false` | A span for each registered precondition evaluated |
+| `traceArguments` | `false` | Spans for message command argument resolution through `Args` |
+
+## Span coverage
+
+- **Listeners and routing** keep the existing `on <event>` and `once <event>` spans. Callback exceptions set error status even when Sapphire catches them. Unknown commands, missing command handlers, and unmatched interactions appear as routing outcomes when available.
+- **Commands** get spans for message, slash, context menu, and command autocomplete callbacks. Message commands also trace prefix lookup and `messagePreParse`.
+- **Interaction handlers** get a run span for each matched handler. With per-handler parse tracing disabled, parse exceptions are recorded on the enclosing Sapphire listener span.
+- **Preconditions** get separate spans for global and command-local evaluation. Expected denials have a `sapphire.outcome` of `denied` and include the Sapphire error identifier.
+- **Startup** traces login, framework store loading, pre-login and post-login plugin hooks, and application command registration callbacks and per-command registry sync.
+
+Sapphire spans use the active OpenTelemetry context. Discord gateway or WebSocket spans can be parents when their instrumentation propagates context to Sapphire. Discord REST spans started during a Sapphire callback can appear as its descendants. For asynchronous event fan-out, each Sapphire listener span measures its own execution.
