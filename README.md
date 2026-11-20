@@ -37,6 +37,7 @@ registerInstrumentations({
 ```
 
 If you are missing spans or do not see the instrumentation being loaded in OTEL debug logs, try the following:
+- Enable OpenTelemetry diagnostics with `diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG)` from `@opentelemetry/api` before registering instrumentation. Look for messages beginning with `sapphire instrumentation:`. They show the framework version being patched and the methods wrapped as Sapphire loads and uses pieces.
 - Preload your telemetry code separately by launching `node` with `--require telemetry.cjs` / `--import telemetry.mjs`. This guarantees the import script will finish completely before your app launches.
 - Convert your app to CommonJS. Native ESM import hooks are still unreliable.
 
