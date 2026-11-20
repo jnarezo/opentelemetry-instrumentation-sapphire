@@ -2,16 +2,15 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createRequire, register } from 'node:module';
 import process from 'node:process';
-import { setImmediate } from 'node:timers/promises';
 import { fileURLToPath, URL } from 'node:url';
 import { context, diag, DiagLogLevel, SpanKind } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
-import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
+import { SimpleSpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
 import { SapphireInstrumentation } from '../dist/index.js';
-import { verifyLifecycle } from './sapphire-lifecycle.mjs';
+import { assertParent, TestSpanExporter, waitForSignal } from './telemetry-fixture.mjs';
 
-const exporter = new InMemorySpanExporter();
+const exporter = new TestSpanExporter();
 const tracerProvider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
 /** @type {string[]} */
 const debugLogs = [];
@@ -41,6 +40,29 @@ try {
     format === 'ESM'
       ? await import('@sapphire/framework')
       : /** @type {typeof import('@sapphire/framework')} */ (createRequire(import.meta.url)('@sapphire/framework'));
+  const scenario = process.argv[3];
+  if (scenario === 'loader') {
+    await verifyLoader(framework);
+  } else {
+    const { verifyLifecycle } = await import('./sapphire-lifecycle.mjs');
+    assert.ok(scenario, 'Expected a scenario name');
+    await verifyLifecycle(scenario, {
+      framework,
+      tracer: tracerProvider.getTracer('sapphire-test-app'),
+      exporter,
+      instrumentation,
+      debugLogs,
+    });
+  }
+} finally {
+  unregister();
+  diag.disable();
+  context.disable();
+  await tracerProvider.shutdown();
+}
+
+/** @param {typeof import('@sapphire/framework')} framework */
+async function verifyLoader(framework) {
   const { Listener, ListenerStore } = framework;
   const moduleLabel = `@sapphire/framework@${framework.version}`;
   assert.ok(debugLogs.includes(`sapphire instrumentation: applying patch to ${moduleLabel}`));
@@ -60,9 +82,11 @@ try {
   const root = fileURLToPath(new URL('.', import.meta.url));
   const path = fileURLToPath(import.meta.url);
 
-  async function dispatch() {
+  /** @param {boolean} instrumented */
+  async function dispatch(instrumented) {
     const emitter = new EventEmitter();
     const store = new ListenerStore();
+    const completion = new EventEmitter();
     /** @type {[string, string][]} */
     const calls = [];
 
@@ -75,14 +99,25 @@ try {
       }
     }
 
+    class OneShotListener extends TestListener {
+      async unload() {
+        await super.unload();
+        completion.emit('unloaded');
+      }
+    }
+
     await store.insert(new TestListener({ store, root, path, name: 'regular' }, { emitter, event }));
-    await store.insert(new TestListener({ store, root, path, name: 'one-shot' }, { emitter, event, once: true }));
+    await store.insert(new OneShotListener({ store, root, path, name: 'one-shot' }, { emitter, event, once: true }));
 
     await tracer.startActiveSpan('dispatch', async (span) => {
       try {
+        const unloaded = waitForSignal(completion, 'unloaded');
         emitter.emit(event, 'payload');
-        // EventEmitter returns immediately. Let Sapphire finish the async callbacks and unload the one-shot listener.
-        await setImmediate();
+        await unloaded;
+        if (instrumented) {
+          await exporter.waitForSpan(`on ${event}`);
+          await exporter.waitForSpan(`once ${event}`);
+        }
       } finally {
         span.end();
       }
@@ -98,7 +133,7 @@ try {
     return exporter.getFinishedSpans();
   }
 
-  const spans = await dispatch();
+  const spans = await dispatch(true);
   assert.equal(
     debugLogs.filter((message) => message === 'sapphire instrumentation: successfully wrapped Listener.run').length,
     1
@@ -134,16 +169,9 @@ try {
       'messaging.destination.temporary': frequency === 'once',
       'messaging.consumer.group.name': name,
     });
-    assert.equal(listener.spanContext().traceId, parent.spanContext().traceId);
-    assert.equal(listener.parentSpanContext?.spanId, parent.spanContext().spanId);
-    assert.equal(handler.spanContext().traceId, parent.spanContext().traceId);
-    assert.equal(handler.parentSpanContext?.spanId, listener.spanContext().spanId);
+    assertParent(listener, parent);
+    assertParent(handler, listener);
   }
-
-  exporter.reset();
-  await verifyLifecycle(framework, tracer, exporter, instrumentation);
-  assert.ok(debugLogs.includes('sapphire instrumentation: successfully wrapped Command.chatInputRun'));
-  assert.ok(debugLogs.includes('sapphire instrumentation: successfully wrapped InteractionHandler.parse'));
 
   debugLogs.length = 0;
   infoLogs.length = 0;
@@ -151,11 +179,6 @@ try {
   assert.ok(debugLogs.includes(`sapphire instrumentation: removing patch from ${moduleLabel}`));
   assert.ok(infoLogs.includes(`sapphire instrumentation: successfully unwrapped ${moduleLabel}`));
   exporter.reset();
-  const unpatchedSpans = await dispatch();
+  const unpatchedSpans = await dispatch(false);
   assert.deepEqual(unpatchedSpans.map((span) => span.name).sort(), ['dispatch', 'handle one-shot', 'handle regular']);
-} finally {
-  unregister();
-  diag.disable();
-  context.disable();
-  await tracerProvider.shutdown();
 }
