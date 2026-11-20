@@ -1,6 +1,7 @@
 import {
   context,
   createContextKey,
+  diag,
   SpanKind,
   trace,
   type Attributes,
@@ -54,12 +55,19 @@ const storeNames = [
 export class Hooks {
   private readonly patches = new MethodPatches();
   private readonly framework: SapphireModule;
+  private readonly moduleLabel: string;
   private readonly tracer: () => Tracer;
   private readonly config: () => SapphireInstrumentationConfig;
   private enabled = false;
 
-  constructor(framework: SapphireModule, tracer: () => Tracer, config: () => SapphireInstrumentationConfig) {
+  constructor(
+    framework: SapphireModule,
+    version: string | undefined,
+    tracer: () => Tracer,
+    config: () => SapphireInstrumentationConfig
+  ) {
     this.framework = framework;
+    this.moduleLabel = version ? `@sapphire/framework@${version}` : '@sapphire/framework';
     this.tracer = tracer;
     this.config = config;
     this.enable();
@@ -69,6 +77,7 @@ export class Hooks {
     if (this.enabled) {
       return;
     }
+    diag.debug(`sapphire instrumentation: applying patch to ${this.moduleLabel}`);
     this.enabled = true;
     this.patches.setActive(true);
     // Revisit registered pieces and plugins that may have been loaded while tracing was disabled.
@@ -79,11 +88,17 @@ export class Hooks {
     this.patchMessageParsing();
     this.patchStartup();
     this.patchRoutingOutcomes();
+    diag.info(`sapphire instrumentation: successfully wrapped ${this.moduleLabel}`);
   }
 
   disable(): void {
+    if (!this.enabled) {
+      return;
+    }
+    diag.debug(`sapphire instrumentation: removing patch from ${this.moduleLabel}`);
     this.enabled = false;
     this.patches.setActive(false);
+    diag.info(`sapphire instrumentation: successfully unwrapped ${this.moduleLabel}`);
   }
 
   private span(
@@ -104,7 +119,7 @@ export class Hooks {
   }
 
   private patchListeners(): void {
-    this.patches.wrap(this.framework.Listener.prototype, '_run', (listener, _args, call) => {
+    this.patches.wrap('Listener', this.framework.Listener.prototype, '_run', (listener, _args, call) => {
       const event = String(listener.event);
       const frequency = listener.once ? 'once' : 'on';
       const span = this.tracer().startSpan(`${frequency} ${event}`, {
@@ -134,7 +149,7 @@ export class Hooks {
       }
       const execution: ListenerExecution = { piece: listener, span, failed: false };
       const active = trace.setSpan(context.active(), span).setValue(listenerKey, execution);
-      this.patches.wrap(listener, 'run', (piece, _args, run) => {
+      this.patches.wrap('Listener', listener, 'run', (piece, _args, run) => {
         const current = context.active().getValue(listenerKey) as ListenerExecution | undefined;
         if (current?.piece !== piece || trace.getActiveSpan() !== current.span) {
           return run();
@@ -168,7 +183,7 @@ export class Hooks {
 
   private patchCommands(): void {
     const { CommandStore } = this.framework;
-    this.patches.wrap(CommandStore?.prototype, 'set', (_store, [, piece], call) => {
+    this.patches.wrap('CommandStore', CommandStore?.prototype, 'set', (_store, [, piece], call) => {
       this.patchCommand(piece as Command);
       return call();
     });
@@ -182,7 +197,7 @@ export class Hooks {
       'messagePreParse',
       'registerApplicationCommands',
     ] as const) {
-      this.patches.wrap(command, method, (piece, _args, call) =>
+      this.patches.wrap('Command', command, method, (piece, _args, call) =>
         this.span(
           `sapphire.command.${method}`,
           {
@@ -204,10 +219,10 @@ export class Hooks {
         'sapphire.piece.type': 'interaction_handler',
         'sapphire.interaction_handler.type': piece.interactionHandlerType,
       });
-      this.patches.wrap(handler, 'run', (piece, _args, call) =>
+      this.patches.wrap('InteractionHandler', handler, 'run', (piece, _args, call) =>
         this.span('sapphire.interaction_handler.run', attributes(piece), call, recordSuccess)
       );
-      this.patches.wrap(handler, 'parse', (piece, _args, call) => {
+      this.patches.wrap('InteractionHandler', handler, 'parse', (piece, _args, call) => {
         if (this.config().traceInteractionHandlerParse) {
           return this.span('sapphire.interaction_handler.parse', attributes(piece), call, (value, span) => {
             if (value instanceof this.framework.Option) {
@@ -232,13 +247,18 @@ export class Hooks {
         );
       });
     };
-    this.patches.wrap(InteractionHandlerStore?.prototype, 'set', (_store, [, piece], call) => {
-      patchHandler(piece as InstanceType<SapphireModule['InteractionHandler']>);
-      return call();
-    });
+    this.patches.wrap(
+      'InteractionHandlerStore',
+      InteractionHandlerStore?.prototype,
+      'set',
+      (_store, [, piece], call) => {
+        patchHandler(piece as InstanceType<SapphireModule['InteractionHandler']>);
+        return call();
+      }
+    );
     this.framework.container?.stores.get('interaction-handlers')?.forEach(patchHandler);
 
-    this.patches.wrap(InteractionHandlerStore?.prototype, 'run', (_store, _args, call) => {
+    this.patches.wrap('InteractionHandlerStore', InteractionHandlerStore?.prototype, 'run', (_store, _args, call) => {
       const parent = this.activeListener()?.span;
       return parent
         ? observe(
@@ -253,20 +273,25 @@ export class Hooks {
   private patchPreconditions(): void {
     const { PreconditionStore, PreconditionContainerArray } = this.framework;
     for (const method of commandMethods) {
-      this.patches.wrap(PreconditionStore?.prototype, method, (_store, [, command], call) =>
+      this.patches.wrap('PreconditionStore', PreconditionStore?.prototype, method, (_store, [, command], call) =>
         this.preconditions('global', method, command as Command, call)
       );
-      this.patches.wrap(PreconditionContainerArray?.prototype, method, (container, [, command], call) => {
-        if ((command as Command | undefined)?.preconditions !== container) {
-          return call();
+      this.patches.wrap(
+        'PreconditionContainerArray',
+        PreconditionContainerArray?.prototype,
+        method,
+        (container, [, command], call) => {
+          if ((command as Command | undefined)?.preconditions !== container) {
+            return call();
+          }
+          return this.preconditions('command', method, command as Command, call);
         }
-        return this.preconditions('command', method, command as Command, call);
-      });
+      );
     }
 
     const patchPrecondition = (piece: InstanceType<SapphireModule['Precondition']>) => {
       for (const method of commandMethods) {
-        this.patches.wrap(piece, method, (check, [, command], call) => {
+        this.patches.wrap('Precondition', piece, method, (check, [, command], call) => {
           if (!this.config().traceIndividualPreconditions) {
             return call();
           }
@@ -285,7 +310,7 @@ export class Hooks {
       }
     };
 
-    this.patches.wrap(PreconditionStore?.prototype, 'set', (_store, [, piece], call) => {
+    this.patches.wrap('PreconditionStore', PreconditionStore?.prototype, 'set', (_store, [, piece], call) => {
       patchPrecondition(piece as InstanceType<SapphireModule['Precondition']>);
       return call();
     });
@@ -324,14 +349,14 @@ export class Hooks {
   }
 
   private patchPrefix(client: SapphireClient): void {
-    this.patches.wrap(client, 'fetchPrefix', (_client, _args, call) =>
+    this.patches.wrap('SapphireClient', client, 'fetchPrefix', (_client, _args, call) =>
       this.span('sapphire.message.fetch_prefix', {}, call)
     );
   }
 
   private patchMessageParsing(): void {
     for (const method of ['pickResult', 'restResult', 'repeatResult', 'peekResult'] as const) {
-      this.patches.wrap(this.framework.Args?.prototype, method, (args, [type], call) => {
+      this.patches.wrap('Args', this.framework.Args?.prototype, method, (args, [type], call) => {
         // Other forms of peekResult delegate to pickResult.
         if (!this.config().traceArguments || (method === 'peekResult' && typeof type !== 'function')) {
           return call();
@@ -351,34 +376,47 @@ export class Hooks {
 
   private patchStartup(): void {
     const { SapphireClient, ApplicationCommandRegistry, PluginHook } = this.framework;
-    this.patches.wrap(SapphireClient?.prototype, 'login', (_client, _args, call) =>
+    this.patches.wrap('SapphireClient', SapphireClient?.prototype, 'login', (_client, _args, call) =>
       this.span('sapphire.client.login', {}, call)
     );
     for (const store of storeNames) {
-      this.patches.wrap(this.framework[store]?.prototype, 'loadAll', (pieceStore, _args, call) =>
+      this.patches.wrap(store, this.framework[store]?.prototype, 'loadAll', (pieceStore, _args, call) =>
         this.span('sapphire.store.load_all', { 'sapphire.store.name': pieceStore.name }, call)
       );
     }
-    this.patches.wrap(ApplicationCommandRegistry?.prototype, 'runAPICalls', (registry, _args, call) =>
-      this.span('sapphire.application_command_registry.sync', { 'sapphire.command.name': registry.commandName }, () => {
-        const sync: RegistrySync = { registry, span: trace.getActiveSpan() };
-        return context.with(context.active().setValue(registrySyncKey, sync), call);
-      })
+    this.patches.wrap(
+      'ApplicationCommandRegistry',
+      ApplicationCommandRegistry?.prototype,
+      'runAPICalls',
+      (registry, _args, call) =>
+        this.span(
+          'sapphire.application_command_registry.sync',
+          { 'sapphire.command.name': registry.commandName },
+          () => {
+            const sync: RegistrySync = { registry, span: trace.getActiveSpan() };
+            return context.with(context.active().setValue(registrySyncKey, sync), call);
+          }
+        )
     );
     // Registry API failures are sometimes caught and reported only through Sapphire's logger.
-    this.patches.wrap(ApplicationCommandRegistry?.prototype, 'error', (registry, [, error], call) => {
-      const sync = context.active().getValue(registrySyncKey) as RegistrySync | undefined;
-      if (sync?.registry === registry && sync.span) {
-        recordFailure(sync.span, error);
+    this.patches.wrap(
+      'ApplicationCommandRegistry',
+      ApplicationCommandRegistry?.prototype,
+      'error',
+      (registry, [, error], call) => {
+        const sync = context.active().getValue(registrySyncKey) as RegistrySync | undefined;
+        if (sync?.registry === registry && sync.span) {
+          recordFailure(sync.span, error);
+        }
+        return call();
       }
-      return call();
-    });
+    );
 
     const plugins = SapphireClient?.plugins;
     const patchPlugins = () => {
       for (const entry of plugins?.registry ?? []) {
         if (entry.type === PluginHook.PreLogin || entry.type === PluginHook.PostLogin) {
-          this.patches.wrap(entry, 'hook', (_client, _args, call) =>
+          this.patches.wrap('Plugin', entry, 'hook', (_client, _args, call) =>
             this.span(
               'sapphire.plugin.hook',
               { 'sapphire.plugin.hook': entry.type, 'sapphire.plugin.name': entry.name },
@@ -389,7 +427,7 @@ export class Hooks {
       }
     };
     patchPlugins();
-    this.patches.wrap(plugins, 'registerHook', (_manager, _args, call) => {
+    this.patches.wrap('PluginManager', plugins, 'registerHook', (_manager, _args, call) => {
       const result = call();
       patchPlugins();
       return result;
@@ -416,7 +454,7 @@ export class Hooks {
       [Events.CommandDoesNotHaveMessageCommandHandler, 'missing_command_handler'],
       [Events.NonPrefixedMessage, 'no_prefix'],
     ]);
-    this.patches.wrap(SapphireClient?.prototype, 'emit', (_client, [event, error], call) => {
+    this.patches.wrap('SapphireClient', SapphireClient?.prototype, 'emit', (_client, [event, error], call) => {
       if (typeof event === 'string') {
         const outcome = outcomes.get(event);
         if (outcome) {

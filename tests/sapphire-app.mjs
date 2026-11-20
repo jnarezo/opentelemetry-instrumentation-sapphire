@@ -4,7 +4,7 @@ import { createRequire, register } from 'node:module';
 import process from 'node:process';
 import { setImmediate } from 'node:timers/promises';
 import { fileURLToPath, URL } from 'node:url';
-import { context, SpanKind } from '@opentelemetry/api';
+import { context, diag, DiagLogLevel, SpanKind } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import { InMemorySpanExporter, SimpleSpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
@@ -13,6 +13,20 @@ import { verifyLifecycle } from './sapphire-lifecycle.mjs';
 
 const exporter = new InMemorySpanExporter();
 const tracerProvider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
+/** @type {string[]} */
+const debugLogs = [];
+/** @type {string[]} */
+const infoLogs = [];
+diag.setLogger(
+  {
+    debug: (message) => debugLogs.push(message),
+    info: (message) => infoLogs.push(message),
+    error: () => {},
+    warn: () => {},
+    verbose: () => {},
+  },
+  DiagLogLevel.DEBUG
+);
 context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 const instrumentation = new SapphireInstrumentation();
 const unregister = registerInstrumentations({ tracerProvider, instrumentations: [instrumentation] });
@@ -28,6 +42,18 @@ try {
       ? await import('@sapphire/framework')
       : /** @type {typeof import('@sapphire/framework')} */ (createRequire(import.meta.url)('@sapphire/framework'));
   const { Listener, ListenerStore } = framework;
+  const moduleLabel = `@sapphire/framework@${framework.version}`;
+  assert.ok(debugLogs.includes(`sapphire instrumentation: applying patch to ${moduleLabel}`));
+  assert.ok(infoLogs.includes(`sapphire instrumentation: successfully wrapped ${moduleLabel}`));
+  for (const hook of [
+    'Listener._run',
+    'CommandStore.set',
+    'InteractionHandlerStore.run',
+    'PreconditionStore.chatInputRun',
+    'SapphireClient.login',
+  ]) {
+    assert.ok(debugLogs.includes(`sapphire instrumentation: successfully wrapped ${hook}`));
+  }
 
   const tracer = tracerProvider.getTracer('sapphire-test-app');
   const event = 'testEvent';
@@ -73,6 +99,10 @@ try {
   }
 
   const spans = await dispatch();
+  assert.equal(
+    debugLogs.filter((message) => message === 'sapphire instrumentation: successfully wrapped Listener.run').length,
+    1
+  );
   assert.deepEqual(spans.map((span) => span.name).sort(), [
     'dispatch',
     'handle one-shot',
@@ -112,13 +142,20 @@ try {
 
   exporter.reset();
   await verifyLifecycle(framework, tracer, exporter, instrumentation);
+  assert.ok(debugLogs.includes('sapphire instrumentation: successfully wrapped Command.chatInputRun'));
+  assert.ok(debugLogs.includes('sapphire instrumentation: successfully wrapped InteractionHandler.parse'));
 
+  debugLogs.length = 0;
+  infoLogs.length = 0;
   unregister();
+  assert.ok(debugLogs.includes(`sapphire instrumentation: removing patch from ${moduleLabel}`));
+  assert.ok(infoLogs.includes(`sapphire instrumentation: successfully unwrapped ${moduleLabel}`));
   exporter.reset();
   const unpatchedSpans = await dispatch();
   assert.deepEqual(unpatchedSpans.map((span) => span.name).sort(), ['dispatch', 'handle one-shot', 'handle regular']);
 } finally {
   unregister();
+  diag.disable();
   context.disable();
   await tracerProvider.shutdown();
 }

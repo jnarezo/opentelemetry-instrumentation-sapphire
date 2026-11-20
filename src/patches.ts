@@ -1,6 +1,9 @@
+import { diag } from '@opentelemetry/api';
+
 type Method = (this: object, ...args: unknown[]) => unknown;
 
 interface MethodPatch {
+  label: string;
   descriptor: PropertyDescriptor | undefined;
   original: Method;
   wrapped: Method;
@@ -8,12 +11,14 @@ interface MethodPatch {
 
 /** Keep unloaded pieces eligible for garbage collection, even while instrumentation is enabled. */
 export class MethodPatches {
+  private readonly loggedHooks = new Set<string>();
   private readonly methods = new WeakMap<object, Map<string, MethodPatch>>();
   private readonly targets = new Set<WeakRef<object>>();
   private readonly registry = new FinalizationRegistry<WeakRef<object>>((ref) => this.targets.delete(ref));
   private active = true;
 
   wrap<T extends object>(
+    component: string,
     target: T | undefined,
     key: string,
     invoke: (receiver: T, args: unknown[], call: () => unknown) => unknown
@@ -67,8 +72,9 @@ export class MethodPatches {
       };
       return isActive() ? invoke(this as T, args, call) : call();
     };
-    methods.set(key, { descriptor, original: method, wrapped });
-    this.install(target, key, descriptor, wrapped);
+    const patch = { label: `${component}.${key}`, descriptor, original: method, wrapped };
+    methods.set(key, patch);
+    this.install(target, key, patch);
   }
 
   setActive(active: boolean): void {
@@ -77,6 +83,9 @@ export class MethodPatches {
     }
 
     this.active = active;
+    if (!active) {
+      this.loggedHooks.clear();
+    }
     for (const ref of this.targets) {
       const target = ref.deref();
       const methods = target && this.methods.get(target);
@@ -88,7 +97,7 @@ export class MethodPatches {
         const current = Object.getOwnPropertyDescriptor(target, key);
         if (active) {
           if (current?.value === patch.original || (!current && !patch.descriptor && Object.isExtensible(target))) {
-            this.install(target, key, current, patch.wrapped);
+            this.install(target, key, patch, current);
           }
         } else if (current?.value === patch.wrapped && (current.configurable || current.writable)) {
           if (patch.descriptor) {
@@ -101,12 +110,16 @@ export class MethodPatches {
     }
   }
 
-  private install(target: object, key: string, descriptor: PropertyDescriptor | undefined, wrapped: Method): void {
+  private install(target: object, key: string, patch: MethodPatch, descriptor = patch.descriptor): void {
     Object.defineProperty(target, key, {
       configurable: true,
       writable: true,
       ...descriptor,
-      value: wrapped,
+      value: patch.wrapped,
     });
+    if (!this.loggedHooks.has(patch.label)) {
+      this.loggedHooks.add(patch.label);
+      diag.debug(`sapphire instrumentation: successfully wrapped ${patch.label}`);
+    }
   }
 }
