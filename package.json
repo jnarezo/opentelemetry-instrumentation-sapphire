@@ -35,7 +35,9 @@
     "build": "tsc --build",
     "lint": "prettier . && eslint && tsc --noEmit",
     "lint:fix": "prettier --write .",
-    "test": "pnpm build && vitest run"
+    "test": "pnpm build && tsc -p tests/tsconfig.json && vitest run",
+    "test:unit": "vitest run .unit.test.",
+    "test:e2e": "pnpm build && vitest run .e2e.test."
   },
   "peerDependencies": {
     "@sapphire/framework": "^5.5.0",
